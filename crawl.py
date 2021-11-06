@@ -6,6 +6,8 @@ import urllib.request
 import argparse
 import pprint
 
+import humanize
+
 from urllib.request import Request, urlopen
 from collections import Counter
 
@@ -24,7 +26,7 @@ INFO_KEYS = [#'domain',
              #'description',
              'stars', 'license', 'contentLicense', 'labels', 'creationTime', 'repoType', 'subrepos', 'hasSource', 'ancestorRepo', 'logoName', 'imageUrl', 'movedTo']
 
-OTHER_KEYS = ['total_sizes_by_language', 'percents_by_language', 'main_language']
+OTHER_KEYS = ['total_sizes_by_language', 'percents_by_language', 'main_language', 'main_common_language']
 
 MAX_SOURCE_PAGES = 20
 
@@ -32,11 +34,14 @@ COMMON_LANGUAGES = {'JavaScript', 'Python', 'Java', 'PHP', 'Ruby', 'C++', 'Go', 
 
 IGNORE_ERRORS = True
 
-def frequency_counter_to_percentages(f_counter, limit=None):
+def size_counter_to_percentages(f_counter, limit=None):
     total = sum(f_counter.values())
     if total == 0:
         return {}
     return {k: round(100 * (v / total), 2) for k, v in f_counter.most_common(limit)}
+
+def size_counter_to_human_readable(f_counter, limit=None):
+    return {k: humanize.naturalsize(v) for k, v in f_counter.most_common(limit)}
 
 def get_extension_to_language_map(languages_yaml_file, verbose=False):
     # this is not an exhaustive list, but it covered the cases that showed up when running this without the override check
@@ -120,6 +125,8 @@ def get_sizes_by_language(project_name, first_source_info=None):
     non_empty_files = []
     empty_files = []
     for filename, size in get_project_files(project_name, first_source_info):
+        if '/.hg/' in filename or '/.svn/' in filename or '/.git/' in filename:
+            continue
         fname, ext = os.path.splitext(filename)
         if ext not in EXTENSION_TO_LANGUAGE:
             continue
@@ -152,9 +159,12 @@ def get_all_project_info(project_name):
         if total == 0 or not bool(sizes_by_language):
             percents_by_language = {}
             main_language = None
+            main_common_language = None
         else:
-            percents_by_language = frequency_counter_to_percentages(sizes_by_language_counter)
+            percents_by_language = size_counter_to_percentages(sizes_by_language_counter)
             main_language = max(sizes_by_language.items(), key=lambda t: t[1])[0]
+            main_common_language = max([(k, v) for k, v in sizes_by_language.items() if k in COMMON_LANGUAGES], 
+                key=lambda t: t[1], default=(None, None))[0]
     except Exception as e:
         if not IGNORE_ERRORS:
             raise e
@@ -164,11 +174,13 @@ def get_all_project_info(project_name):
         sizes_by_language = {}
         percents_by_language = {}
         main_language = None
+        main_common_language = None
     for key in SOURCE_KEYS:
         d[key] = source_info.get(key, '')
         d['total_sizes_by_language'] = json.dumps(sizes_by_language)
         d['percents_by_language'] = json.dumps(percents_by_language)
         d['main_language'] = main_language
+        d['main_common_language'] = main_common_language
     return d, error, sizes_by_language
 
 if __name__ == "__main__":
@@ -231,11 +243,11 @@ if __name__ == "__main__":
         if error:
             error_count += 1
 
-        main_language = record.get('main_language')
+        main_common_language = record.get('main_common_language')
         stars = record.get('stars')
         license = record.get('license')
 
-        language_counts[main_language] += 1
+        language_counts[main_common_language] += 1
         star_counts[stars] += 1
         license_counts[license] += 1
         total_sizes_by_language += sizes_by_language
@@ -245,7 +257,7 @@ if __name__ == "__main__":
         if open_source:
             total_open_source_sizes_by_language += sizes_by_language
 
-        is_usable = open_source and (main_language == 'Python')
+        is_usable = open_source and (main_common_language == 'Python')
         if is_usable:
             usable_repos += 1
         repo_count += 1
@@ -258,11 +270,17 @@ if __name__ == "__main__":
         if (repo_count) % 100 == 0:
             print("**printing stats**")
             print(f"{usable_repos:_} / {repo_count:_} usable repos\t{error_count} errors")
+            print("most common language counts:")
             print(language_counts.most_common())
+            print("license counts:")
             print(license_counts.most_common())
+            print("language amounts (all repos):")
+            print(size_counter_to_human_readable(total_sizes_by_language, limit=20))
+            print("language amounts (open-source repos):")
+            print(size_counter_to_human_readable(total_open_source_sizes_by_language, limit=20))
             print("language fractions (all repos):")
-            print(frequency_counter_to_percentages(total_sizes_by_language, limit=20))
+            print(size_counter_to_percentages(total_sizes_by_language, limit=20))
             print("language fractions (open-source repos):")
-            print(frequency_counter_to_percentages(total_open_source_sizes_by_language, limit=20))
+            print(size_counter_to_percentages(total_open_source_sizes_by_language, limit=20))
             print()
             csv_file.flush()
